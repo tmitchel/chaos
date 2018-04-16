@@ -1,10 +1,12 @@
 package main
 
 import (
+    "os"
     "log"
     "fmt"
     "time"
     "math"
+    "flag"
     "image/color"
     "gonum.org/v1/plot/vg/draw"
     "gonum.org/v1/plot"
@@ -40,12 +42,28 @@ func feig_gen(r float64, x0 float64) chan float64 {
 // useful numbers for convergence to the console     //
 /////////////////////////////////////////////////////// 
 func main() {
+
+    make_plot := flag.Bool("plot", false, "Create pdf of Feigenbaum Diagram")
+    r_print := flag.Float64("r", 2., "Value of r to print (must be less than 4)")
+    x0_print := flag.Float64("x0", 0.5, "Value of x0 to print")
+    n_iter := flag.Int("n", 300, "Number of iterations to complete")
+
+    flag.Parse()
     start := time.Now()
     
+    // ugly way to deal with errors
+    if *r_print > 4 || *r_print < 0 {
+        fmt.Println("r must be in the range [0., 4.]")
+        os.Exit(1)
+    } else if *x0_print > 1 || *x0_print < 0 {
+        fmt.Println("x0 must be in the range [0., 1.]")
+        os.Exit(1)
+    }
+
     // 2d array of channels to hold results
     comps := make([][]chan float64, 0)
 
-    for r := 0.; r < 3.999; r += 0.001 {
+    for r := 0.; r < 4.; r += 0.001 { 
         temp := make([]chan float64, 0)
         for x0 := 0.; x0 < 1.; x0 += 0.01 { 
             // start the iteration and place return channel in array
@@ -56,39 +74,74 @@ func main() {
 
     calc_time := time.Since(start)
 
-    // format data to be plotted
-    fillXY := func(input *[][]chan float64) plotter.XYs {
-        total_len := len(*input) * len((*input)[0])
-        points := make(plotter.XYs, total_len)
-        for indr, compr := range *input {
-            for indx, compx := range compr {
-                // want result after 300 iteration, so pop off first 299 objects in the channel
-                printed := false
-                for i := 0; i < 300; i++ {
-                    // check convergence in 1 < r < 3 range (should conv to 0.5 in 4 iterations)
-                    if curr_r := 4*float64(indr)/float64(len(*input)); curr_r == 2. {
-                        temp := <- compx
-                        if math.Abs(temp - 0.5) < 0.001 && !printed && indx == 30 {
-                            fmt.Println("Convergence to Xn", temp, "with accuracy", math.Abs(temp - 0.5), "after", i, "iterations.")
-                            printed = true
-                        }
-                    } else if curr_r == 3.2 {
-                        // Should oscillate between (0.51304 and 0.79946) and does after ~30 iterations
-                        temp := <- compx
-                        if indx == 30 {
-                            fmt.Println("r=3.2 and Xo=0.3 has Xn", temp, "after", i, "iterations.")
-                        } 
-                    } else {
-                        <- compx
-                    }
-                }
-                // convert 2d array indices into a 1d array index
-                index := indr*indx + indx
-                points[index].X = 4 * float64(indr) / float64(len(*input))
-                points[index].Y = <- compx
+    op_plot := do_plotting
+    if *make_plot {
+        op_plot(&comps, n_iter)
+    } else if *r_print > 0 && *r_print < 3.569455 {
+        conv_print(&comps, n_iter, r_print, x0_print)
+    } else {
+        chaos_print(&comps, n_iter, r_print, x0_print)
+    }
+
+    elapsed := time.Since(start)
+    log.Printf("Time spent on calculation: %s", calc_time)
+    log.Printf("Time spent on other: %s", elapsed - calc_time)
+    log.Printf("Processing completed in: %s", elapsed)
+
+}
+
+func chaos_print(input *[][]chan float64, n_iter *int, r_print, x0_print *float64) {
+    r := int(*r_print * 1000)
+    x0 := int((*x0_print * 100))
+
+    for i := 1; i < *n_iter; i++ {
+        Xn := <-(*input)[r][x0]
+        Xnp := <-(*input)[r][x0+1]
+        fmt.Printf("Xn = %6.4f; Xn' = %6.4f; delta(X) = %6.4f\n", Xn, Xnp, math.Abs(Xn-Xnp))
+    }
+}
+
+func conv_print(input *[][]chan float64, n_iter *int, r_print, x0_print *float64) {
+    r := int(*r_print * 1000)
+    x0 := int((*x0_print * 100))
+
+    if *r_print == 2. {
+        for i := 0; i < *n_iter; i++ {
+            current := <-(*input)[r][x0]
+            fmt.Printf("Asympt: %6.4f; Xn = %6.4f with diff %6.4f after %v iterations\n", 0.5, current, math.Abs(current-0.5), i+1)
+        }
+    } else if *r_print == 3.2 {
+        for i := 0; i < *n_iter; i++ {
+            current := <-(*input)[r][x0]
+            if math.Abs(current-0.51304) < math.Abs(current-0.79946) {
+                fmt.Printf("Asympt: %6.4f; Xn = %6.4f with diff %6.5f after %v iterations\n", 0.51304, current, math.Abs(current-0.51304), i+1)
+            } else {
+                fmt.Printf("Asympt: %6.4f; Xn = %6.4f with diff %6.5f after %v iterations\n", 0.79946, current, math.Abs(current-0.79946), i+1)
             }
         }
-        return points
+    } else {
+        for i := 0; i < *n_iter; i++ {
+            fmt.Printf("Xn = %6.4f after %v iterations", <-(*input)[r][x0], i+1)
+        }
+    }
+}
+
+
+func do_plotting(input *[][]chan float64, n *int) {
+    // format data to be plotted
+    total_len := len(*input) * len((*input)[0])
+    points := make(plotter.XYs, total_len)
+    for indr, compr := range *input {
+        for indx, compx := range compr {
+            // want result after 300 iteration, so pop off first 299 objects in the channel
+            for i := 0; i < *n; i++ {
+                <- compx
+            }
+            // convert 2d array indices into a 1d array index
+            index := indr*indx + indx
+            points[index].X = 4 * float64(indr) / float64(len(*input))
+            points[index].Y = <- compx
+        }
     }
 
     // define a plot
@@ -104,7 +157,8 @@ func main() {
     p.Add(plotter.NewGrid())
 
     // fill the scatter plot with points
-    s, err := plotter.NewScatter(fillXY(&comps))
+    // s, err := plotter.NewScatter(fillXY(&comps))
+    s, err := plotter.NewScatter(points)
     if err != nil {
         log.Fatal(err)
     }
@@ -116,15 +170,6 @@ func main() {
 
     // add it and save
     p.Add(s)
-    p.Save(600, 400, "fullRange_feigenbaum.pdf")
-
-    elapsed := time.Since(start)
-    log.Printf("Time spent on calculation: %s", calc_time)
-    log.Printf("Time spent on plotting: %s", elapsed - calc_time)
-    log.Printf("Processing completed in: %s", elapsed)
-
+    p.Save(600, 400, "feigenbaum.pdf")
 }
-
-
-
 
