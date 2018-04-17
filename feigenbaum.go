@@ -12,6 +12,7 @@ import (
     "gonum.org/v1/plot"
     "gonum.org/v1/plot/vg"
     "gonum.org/v1/plot/plotter"
+    // "gonum.org/v1/plot/plotutil"
 )
 
 ////////////////////////////////////////////////////////
@@ -44,6 +45,8 @@ func feig_gen(r float64, x0 float64) chan float64 {
 func main() {
 
     make_plot := flag.Bool("plot", false, "Create pdf of Feigenbaum Diagram")
+    find_liapunov := flag.Bool("liap", false, "Find Liapunov exponent")
+    find_bifunction := flag.Bool("bi", false, "Find the bifunction points (1 and 2 only)")
     r_print := flag.Float64("r", 2., "Value of r to print (must be less than 4)")
     x0_print := flag.Float64("x0", 0.5, "Value of x0 to print")
     n_iter := flag.Int("n", 300, "Number of iterations to complete")
@@ -76,6 +79,10 @@ func main() {
 
     if *make_plot {
         results.do_plotting(n_iter)
+    } else if *find_liapunov {
+        results.plot_liapunov(n_iter, x0_print, 0.001, 4.0)
+    } else if *find_bifunction {
+        results.bifunction(x0_print)
     } else if *r_print > 0 && *r_print < 3.569455 {
         results.conv_print(n_iter, r_print, x0_print)
     } else {
@@ -90,6 +97,7 @@ func main() {
 }
 
 
+
 /////////////////////////////////////////////////////
 // Purpose: Hold 2d channel array and provide some // 
 // nice functions for accessing elements           //
@@ -99,6 +107,88 @@ func main() {
 type data_holder struct {
     r, x0 float64
     input *[][] chan float64
+}
+
+func (d data_holder) bifunction(x0 *float64) {
+    x_ind := d.get_idx(*x0)
+    found_one, found_two := false, false
+    for i, arr := range (*d.input) {
+        if i == 0 {
+            continue
+        }
+        r := float64(i)/1000.
+        for j := 0; j < 297; j++ {
+            <-arr[x_ind]
+        }
+        comp_r3 := <-arr[x_ind]
+        comp_r2 := <-arr[x_ind]
+        comp_r1 := <-arr[x_ind]
+        curr := <-arr[x_ind]
+        if !found_one {
+            if math.Abs(curr - comp_r1) > 0.0001 {
+                found_one = true
+                fmt.Println("1->2 period bifurcation point:", r)
+            }
+        } else if found_one && !found_two {
+            if math.Abs(curr - comp_r1) > 0.0001 && math.Abs(curr - comp_r2) > 0.0001 {
+                fmt.Println("2->4 period bifurcation point:", r)
+                found_two = true    
+            }
+        } else {
+            if math.Abs(curr - comp_r1) > 0.0001 && math.Abs(curr - comp_r2) > 0.0001 && math.Abs(curr - comp_r3) > 0.0001 {
+                fmt.Println("4->8 period bifurcation point:", r)
+                found_two = true                
+                break
+            }
+        }
+    }
+}
+
+func (d data_holder) liapunov(n *int, x0 *float64) []float64 {
+    expos := make([]float64, d.r_length())
+    x_ind := d.get_idx(*x0)
+    for i, arr := range (*d.input) {
+        r := float64(i)/1000.
+        expo := 0.
+        <-arr[x_ind]
+        for j := 0; j < *n; j++ {
+            expo += math.Log(math.Abs(r - 2*r*(<- arr[x_ind])))
+        }
+        expos[i] = expo/float64(*n)
+    }
+    return expos
+}
+
+func (d data_holder) plot_liapunov(n *int, x0 *float64, r_init, r_fin float64) {
+    expos := d.liapunov(n, x0)
+
+    p, err := plot.New()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    pts := make(plotter.XYs, d.r_length())
+    for i, _ := range pts {
+        if i == 0 {
+            continue
+        }
+        pts[i].X = float64(i)/1000.
+        pts[i].Y = expos[i]
+    }
+
+    l, err := plotter.NewLine(pts)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    p.Add(l)
+    // p.X.Min = 3.4
+    p.Y.Min = -1
+    p.Y.Max = 1
+
+    if err := p.Save(600, 400, "liapunov.pdf"); err != nil {
+        log.Fatal(err)
+    }
 }
 
 /////////////////////////////////////////////////////////////////
@@ -188,8 +278,6 @@ func (d data_holder) conv_print(n *int, opt ...*float64) {
             fmt.Printf("Xn = %6.4f after %v iterations", <-(*d.input)[r][x0], i+1)
         }
     }
-
-
 }
 
 //////////////////////////////////////////////////////////
@@ -238,11 +326,11 @@ func (d data_holder) get_iteration_n(n int, opt ...int) chan float64 {
 
 // other nifty functions for later. Not important for homework assignment
 func (d data_holder) get_idr(r float64) int {
-    return int(d.r*1000)
+    return int(r*1000)
 }
 
 func (d data_holder) get_idx(x0 float64) int {
-    return int(d.x0*100)
+    return int(x0*100)
 }
 
 func (d data_holder) r_length() int {
