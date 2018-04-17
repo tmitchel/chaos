@@ -51,7 +51,7 @@ func main() {
     flag.Parse()
     start := time.Now()
     
-    // ugly way to deal with errors
+    // ugly way to deal with errors. fix later
     if *r_print > 4 || *r_print < 0 {
         fmt.Println("r must be in the range [0., 4.]")
         os.Exit(1)
@@ -60,27 +60,26 @@ func main() {
         os.Exit(1)
     }
 
-    // 2d array of channels to hold results
-    comps := make([][]chan float64, 0)
+    data := make([][]chan float64, 0)
+    results := data_holder{r: *r_print, x0: *x0_print, input: &data}
 
-    for r := 0.; r < 4.; r += 0.001 { 
+    for r := 0.; r < 4.; r += 0.001 {
         temp := make([]chan float64, 0)
-        for x0 := 0.; x0 < 1.; x0 += 0.01 { 
-            // start the iteration and place return channel in array
+        for x0 := 0.; x0 < 1.; x0+= 0.01 {
+            // start the iteration and place return channel in data array
             temp = append(temp, feig_gen(r, x0))
         }
-        comps = append(comps, temp)
+        *results.input = append(*results.input, temp)
     }
 
     calc_time := time.Since(start)
 
-    op_plot := do_plotting
     if *make_plot {
-        op_plot(&comps, n_iter)
+        results.do_plotting(n_iter)
     } else if *r_print > 0 && *r_print < 3.569455 {
-        conv_print(&comps, n_iter, r_print, x0_print)
+        results.conv_print(n_iter, r_print, x0_print)
     } else {
-        chaos_print(&comps, n_iter, r_print, x0_print)
+        results.chaos_print(n_iter)
     }
 
     elapsed := time.Since(start)
@@ -90,24 +89,32 @@ func main() {
 
 }
 
+
+/////////////////////////////////////////////////////
+// Purpose: Hold 2d channel array and provide some // 
+// nice functions for accessing elements           //
+// (I'd probably put this all in a different file, //
+// but that would make the grading difficult)      //
+/////////////////////////////////////////////////////
+type data_holder struct {
+    r, x0 float64
+    input *[][] chan float64
+}
+
 /////////////////////////////////////////////////////////////////
 // Purpose: Handle producing the pdf of the Feigenbaum Diagram //
 // Return: Nothing (pdf saved to system)                       //
 /////////////////////////////////////////////////////////////////
-func do_plotting(input *[][]chan float64, n *int) {
+func (d data_holder) do_plotting(n *int) {
     // format data to be plotted
-    total_len := len(*input) * len((*input)[0])
+    total_len := len(*d.input) * len((*d.input)[0])
     points := make(plotter.XYs, total_len)
-    for indr, compr := range *input {
-        for indx, compx := range compr {
-            // want result after 300 iteration, so pop off first 299 objects in the channel
-            for i := 0; i < *n; i++ {
-                <- compx
-            }
+    for indr, compr := range *d.input {
+        for indx, _ := range compr {
             // convert 2d array indices into a 1d array index
             index := indr*indx + indx
-            points[index].X = 4 * float64(indr) / float64(len(*input))
-            points[index].Y = <- compx
+            points[index].X = 4 * float64(indr) / float64(len(*d.input))
+            points[index].Y = <-d.get_iteration_n(*n, indr, indx)
         }
     }
 
@@ -124,7 +131,6 @@ func do_plotting(input *[][]chan float64, n *int) {
     p.Add(plotter.NewGrid())
 
     // fill the scatter plot with points
-    // s, err := plotter.NewScatter(fillXY(&comps))
     s, err := plotter.NewScatter(points)
     if err != nil {
         log.Fatal(err)
@@ -145,20 +151,31 @@ func do_plotting(input *[][]chan float64, n *int) {
 // r not such that the system is in the chaotic region    //
 // Return: Nothing (Printing to console)                  //
 ////////////////////////////////////////////////////////////
-func conv_print(input *[][]chan float64, n_iter *int, r_print, x0_print *float64) {
-    r := int(*r_print * 1000)
-    x0 := int((*x0_print * 100))
+func (d data_holder) conv_print(n *int, opt ...*float64) {
+    var r, x0 int
+    var r_print, x0_print float64
+    if len(opt) == 0 {
+        r = d.get_idr(d.r)
+        x0 = d.get_idx(d.x0)
+        r_print = d.r
+        x0_print = d.x0
+    } else {
+        r_print = *opt[0]
+        x0_print = *opt[1]
+        r = d.get_idr(r_print)
+        x0 = d.get_idx(x0_print)
+    }
 
     // hard-code to compare with the book when r=2, x0=0.3
-    if *r_print == 2. {
-        for i := 0; i < *n_iter; i++ {
-            current := <-(*input)[r][x0]
+    if r_print == 2. {
+        for i := 0; i < *n; i++ {
+            current := <-(*d.input)[r][x0]
             fmt.Printf("Asympt: %6.4f; Xn = %6.4f with diff %6.4f after %v iterations\n", 0.5, current, math.Abs(current-0.5), i+1)
         }
-    } else if *r_print == 3.2 {
+    } else if r_print == 3.2 {
         // hard-code to compare with the book when r=3.2, x0=0.3
-        for i := 0; i < *n_iter; i++ {
-            current := <-(*input)[r][x0]
+        for i := 0; i < *n; i++ {
+            current := <-(*d.input)[r][x0]
             if math.Abs(current-0.51304) < math.Abs(current-0.79946) {
                 fmt.Printf("Asympt: %6.4f; Xn = %6.4f with diff %6.5f after %v iterations\n", 0.51304, current, math.Abs(current-0.51304), i+1)
             } else {
@@ -167,10 +184,12 @@ func conv_print(input *[][]chan float64, n_iter *int, r_print, x0_print *float64
         }
     } else {
         // not sure where all the attractors are so just print values
-        for i := 0; i < *n_iter; i++ {
-            fmt.Printf("Xn = %6.4f after %v iterations", <-(*input)[r][x0], i+1)
+        for i := 0; i < *n; i++ {
+            fmt.Printf("Xn = %6.4f after %v iterations", <-(*d.input)[r][x0], i+1)
         }
     }
+
+
 }
 
 //////////////////////////////////////////////////////////
@@ -178,24 +197,52 @@ func conv_print(input *[][]chan float64, n_iter *int, r_print, x0_print *float64
 // system is not in the chaotic region                  //
 // Return: Nothing (Printing to console)                //
 //////////////////////////////////////////////////////////
-func chaos_print(input *[][]chan float64, n_iter *int, r_print, x0_print *float64) {
-    r := int(*r_print * 1000)
-    x0 := int((*x0_print * 100))
+func (d data_holder) chaos_print(n *int, opt ...float64) {
+    var r, x0 int
+    if len(opt) == 0 {
+        r = d.get_idr(d.r)
+        x0 = d.get_idx(d.x0)
+    } else {
+        r = d.get_idr(opt[0])
+        x0 = d.get_idx(opt[1])
+    }
 
     // print the difference between requested x0 and one nearby
-    for i := 1; i < *n_iter; i++ {
-        Xn := <-(*input)[r][x0]
-        Xnp := <-(*input)[r][x0+1]
+    for i := 1; i < *n; i++ {
+        Xn := <-(*d.input)[r][x0]
+        Xnp := <-(*d.input)[r][x0+1]
         fmt.Printf("Xn = %6.4f; Xn' = %6.4f; delta(X) = %6.4f\n", Xn, Xnp, math.Abs(Xn-Xnp))
     }
 }
 
+/////////////////////////////////////////////////////////
+// Purpose: Pop off a given number of entries from the //
+// channel queue                                       //
+// Return: channel after a given number of iterations  //
+/////////////////////////////////////////////////////////
+func (d data_holder) get_iteration_n(n int, opt ...int) chan float64 {
+    var pop_chan chan float64
+    if len(opt) == 0 {
+        pop_chan = (*d.input)[d.get_idr(d.r)][d.get_idx(d.x0)]
+    } else if len(opt) == 2 {
+        pop_chan = (*d.input)[opt[0]][opt[1]]
+    } else {
+        fmt.Println("Wrong number of parameters. (Will add better handling later.)")
+        os.Exit(1)
+    }
+    for i := 0; i < n; i++ {
+        <-pop_chan
+    }
+    return pop_chan
+}
 
-// TODO: put all of data into this struct to make accessing cleaner
-// TODO: make all current functions into methods of data_holder struct
-type data_holder struct {
-    r, x0 int
-    input *[][] chan float64
+// other nifty functions for later. Not important for homework assignment
+func (d data_holder) get_idr(r float64) int {
+    return int(d.r*1000)
+}
+
+func (d data_holder) get_idx(x0 float64) int {
+    return int(d.x0*100)
 }
 
 func (d data_holder) r_length() int {
@@ -212,20 +259,4 @@ func (d data_holder) get_r(r int) []chan float64 {
 
 func (d data_holder) get(r, x int) chan float64 {
     return (*d.input)[r*1000][x*1000]
-}
-
-func (d data_holder) get_iteration_n(n ...int) chan float64 {
-    var pop_chan chan float64
-    if len(n) == 1 {
-        pop_chan = (*d.input)[d.r*1000][d.x0*1000]
-    } else if len(n) == 3 {
-        pop_chan = (*d.input)[n[1]*1000][n[2]*1000]
-    } else {
-        fmt.Println("Wrong number of parameters. (Will add better handling later.)")
-        os.Exit(1)
-    }
-    for i := 0; i < n[0]; i++ {
-        <-pop_chan
-    }
-    return pop_chan
 }
