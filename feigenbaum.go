@@ -8,9 +8,9 @@ import (
     "math"
     "flag"
     "image/color"
-    "gonum.org/v1/plot/vg/draw"
     "gonum.org/v1/plot"
     "gonum.org/v1/plot/vg"
+    "gonum.org/v1/plot/vg/draw"
     "gonum.org/v1/plot/plotter"
     // "gonum.org/v1/plot/plotutil"
 )
@@ -44,9 +44,10 @@ func feig_gen(r float64, x0 float64) chan float64 {
 /////////////////////////////////////////////////////// 
 func main() {
 
+    // Command-line options
     make_plot := flag.Bool("plot", false, "Create pdf of Feigenbaum Diagram")
     find_liapunov := flag.Bool("liap", false, "Find Liapunov exponent")
-    find_bifunction := flag.Bool("bi", false, "Find the bifunction points (1 and 2 only)")
+    find_bifurcation := flag.Bool("bi", false, "Find the bifurcation points (1 and 2 only)")
     r_print := flag.Float64("r", 2., "Value of r to print (must be less than 4)")
     x0_print := flag.Float64("x0", 0.5, "Value of x0 to print")
     n_iter := flag.Int("n", 300, "Number of iterations to complete")
@@ -77,18 +78,20 @@ func main() {
 
     calc_time := time.Since(start)
 
+    // choose output based on user input
     if *make_plot {
         results.do_plotting(n_iter)
     } else if *find_liapunov {
         results.plot_liapunov(n_iter, x0_print, 0.001, 4.0)
-    } else if *find_bifunction {
-        results.bifunction(x0_print)
+    } else if *find_bifurcation {
+        results.bifurcation(n_iter, x0_print)
     } else if *r_print > 0 && *r_print < 3.569455 {
         results.conv_print(n_iter, r_print, x0_print)
     } else {
         results.chaos_print(n_iter)
     }
 
+    // print some timing info
     elapsed := time.Since(start)
     log.Printf("Time spent on calculation: %s", calc_time)
     log.Printf("Time spent on other: %s", elapsed - calc_time)
@@ -109,33 +112,46 @@ type data_holder struct {
     input *[][] chan float64
 }
 
-func (d data_holder) bifunction(x0 *float64) {
+/////////////////////////////////////////////////////////
+// Purpose: Find the bifurcation points                //
+// Returns: Print to command line the given points     //
+/////////////////////////////////////////////////////////
+func (d data_holder) bifurcation(n *int, x0 *float64) {
     x_ind := d.get_idx(*x0)
     found_one, found_two := false, false
     for i, arr := range (*d.input) {
         if i == 0 {
             continue
         }
+
         r := float64(i)/1000.
-        for j := 0; j < 297; j++ {
+        for j := 0; j < *n-4; j++ { // should use get_iteration_n here
             <-arr[x_ind]
         }
+
+        comp_r4 := <- arr[x_ind]
         comp_r3 := <-arr[x_ind]
         comp_r2 := <-arr[x_ind]
         comp_r1 := <-arr[x_ind]
         curr := <-arr[x_ind]
+
+        // if we haven't found any points yet, find when Xn begins to 
+        // vary rapidly between iterations
         if !found_one {
             if math.Abs(curr - comp_r1) > 0.0001 {
                 found_one = true
                 fmt.Println("1->2 period bifurcation point:", r)
             }
         } else if found_one && !found_two {
+            // if we have found one point, but not two, find when Xn begins to vary between
+            // more than two points per two iterations
             if math.Abs(curr - comp_r1) > 0.0001 && math.Abs(curr - comp_r2) > 0.0001 {
                 fmt.Println("2->4 period bifurcation point:", r)
                 found_two = true    
             }
         } else {
-            if math.Abs(curr - comp_r1) > 0.0001 && math.Abs(curr - comp_r2) > 0.0001 && math.Abs(curr - comp_r3) > 0.0001 {
+            // if we found two points, find when Xn varies between more than 4 points per 4 iterations
+            if math.Abs(curr - comp_r1) > 0.0001 && math.Abs(curr - comp_r2) > 0.0001 && math.Abs(curr - comp_r3) > 0.0001 && math.Abs(curr - comp_r4) > 0.0001 {
                 fmt.Println("4->8 period bifurcation point:", r)
                 found_two = true                
                 break
@@ -144,22 +160,34 @@ func (d data_holder) bifunction(x0 *float64) {
     }
 }
 
+/////////////////////////////////////////////////////////////
+// Purpose: Calculate the Liapunov exponent for a given x0 //
+// Returns: an array of exponents for all r values         //
+/////////////////////////////////////////////////////////////
 func (d data_holder) liapunov(n *int, x0 *float64) []float64 {
     expos := make([]float64, d.r_length())
     x_ind := d.get_idx(*x0)
     for i, arr := range (*d.input) {
+        // convert r from index to actual float-value
         r := float64(i)/1000.
         expo := 0.
         <-arr[x_ind]
+        // Sum over f'(x)
         for j := 0; j < *n; j++ {
             expo += math.Log(math.Abs(r - 2*r*(<- arr[x_ind])))
         }
+        // normalize by the number of iterations
         expos[i] = expo/float64(*n)
     }
     return expos
 }
 
+////////////////////////////////////////////////////
+// Purpose: Plot the Liapunov exponent vs r value //
+// Returns: A saved pdf of the plot               //
+////////////////////////////////////////////////////
 func (d data_holder) plot_liapunov(n *int, x0 *float64, r_init, r_fin float64) {
+    // array to hold calculations
     expos := d.liapunov(n, x0)
 
     p, err := plot.New()
@@ -167,6 +195,7 @@ func (d data_holder) plot_liapunov(n *int, x0 *float64, r_init, r_fin float64) {
         log.Fatal(err)
     }
 
+    // read from channel to fill plots
     pts := make(plotter.XYs, d.r_length())
     for i, _ := range pts {
         if i == 0 {
@@ -186,6 +215,7 @@ func (d data_holder) plot_liapunov(n *int, x0 *float64, r_init, r_fin float64) {
     p.Y.Min = -1
     p.Y.Max = 1
 
+    // save okit
     if err := p.Save(600, 400, "liapunov.pdf"); err != nil {
         log.Fatal(err)
     }
@@ -203,8 +233,8 @@ func (d data_holder) do_plotting(n *int) {
         for indx, _ := range compr {
             // convert 2d array indices into a 1d array index
             index := indr*indx + indx
-            points[index].X = 4 * float64(indr) / float64(len(*d.input))
-            points[index].Y = <-d.get_iteration_n(*n, indr, indx)
+            points[index].X = 4 * float64(indr) / float64(len(*d.input)) // r-value
+            points[index].Y = <-d.get_iteration_n(*n, indr, indx)        // Xn value
         }
     }
 
