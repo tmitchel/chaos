@@ -1,5 +1,14 @@
 package main
 
+////////////////////////////////////////////////////
+// Purpose: To solve the Rossler equations with a //
+// given set of initial conditions and parameter  // 
+// values                                         //
+// Return: A single pdf with 3 plots overlayed.   //
+// The pdf contains plots of each permutation of  //
+// the three space coordinates                    //
+////////////////////////////////////////////////////
+
 import (
     // "fmt"
     "flag"
@@ -10,11 +19,23 @@ import (
     "gonum.org/v1/plot/plotter"
 )
 
+////////////////////////////////////////////////////
+// Purpose: Simple struct to hold a point for     //
+// plotting                                       //
+// Variables: X, Y, Z coordinates and an int to   //
+// signal when a result blows up and can't be     //
+// plotted                                        //
+////////////////////////////////////////////////////
 type point struct {
     x, y, z float64
     breaker int
 }
 
+////////////////////////////////////////////////////
+// Purpose: Do the iterative calculations         //
+// Returns: A buffered channel packed with point  //
+// structs                                        //
+////////////////////////////////////////////////////
 func iter(x0, y0, z0, a, b, c float64) chan point {
     channel := make(chan point, 400)
     sign := 0
@@ -33,6 +54,7 @@ func iter(x0, y0, z0, a, b, c float64) chan point {
 
 func main() {
 
+    // Command-line options
     a  := flag.Float64("a" , 0.2    , "Parameter a")
     b  := flag.Float64("b" , 0.2    , "Parameter b")
     c  := flag.Float64("c" , 5.7    , "Parameter c")
@@ -42,6 +64,7 @@ func main() {
     t  := flag.Int(    "t" , 100000 , "Number of time steps")
     flag.Parse()
 
+    // channel holding the results
     results := iter(*x0, *y0, *z0, *a, *b, *c)
     
     p, err := plot.New()
@@ -53,6 +76,7 @@ func main() {
     pts_xz := make(plotter.XYs, *t)
     pts_yz := make(plotter.XYs, *t)
 
+    // read from channel to fill plots
     for i := 0; i < *t; i++ {
         pt := <-results
         if pt.breaker < 0 {
@@ -63,6 +87,7 @@ func main() {
         pts_yz[i].X, pts_yz[i].Y = pt.y, pt.z
     }
 
+    // make the plots pretty
     lxy, _ := plotter.NewLine(pts_xy)
     lxy.Color = color.RGBA{G: 255}
     lxz, _ := plotter.NewLine(pts_xz)
@@ -72,6 +97,7 @@ func main() {
 
     p.Add(lxy, lxz, lyz)
 
+    // convert values to strings for title/file name
     a_val  := strconv.FormatFloat(*a, 'f', -1, 64)
     b_val  := strconv.FormatFloat(*b, 'f', -1, 64)
     c_val  := strconv.FormatFloat(*c, 'f', -1, 64)
@@ -84,6 +110,7 @@ func main() {
     p.Legend.Add("X(t) vs Z(T)", lxz)
     p.Legend.Add("Y(t) vs Z(T)", lyz)
 
+    // save as pdf
     if err := p.Save(600, 400, "rossler_c"+c_val+".pdf"); err != nil {
         panic(err)
     }
