@@ -40,6 +40,7 @@ func iter(x0, y0, z0, a, b, c float64) chan point {
     channel := make(chan point, 400)
     sign := 0
 
+    // the iteration is done here
     go func () {
         for x, y, z := x0, y0, z0; ; x, y, z = (-(y+z))/1000.+x, (x+a*y)/1000.+y, (b+z*(x-c))/1000.+z {
             if math.IsNaN(x) || math.IsNaN(y) || math.IsNaN(z) || math.IsInf(x, sign) || math.IsInf(y, sign) || math.IsInf(z, sign) {
